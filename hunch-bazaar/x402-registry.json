@@ -1,0 +1,133 @@
+{
+  "$comment": "x402 service listing and pinned signing policy for the HUNCH BAZAAR skill (hunch-bazaar, published at https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar). Bazaar charges exactly one thing over x402: a bet's stake. The creation bond and listing fee are retired (their routes answer 410) and are never paid. Every other write is authorized by a free personal_sign wallet proof, pinned under signingPolicy.walletProof.",
+  "name": "hunch-bazaar-bets",
+  "title": "Bazaar: bet on a market its creator settles",
+  "description": "Bet YES/NO (or an N-way outcome) on Bazaar, the prediction markets anyone opens at bazaar.playhunch.xyz and the creator resolves. The stake settles in USDC on Base before the bet exists.",
+  "version": "bazaar-agent-api-v1",
+  "provider": {
+    "name": "Hunch",
+    "url": "https://bazaar.playhunch.xyz",
+    "contact": "https://www.playhunch.xyz"
+  },
+  "endpoint": {
+    "method": "POST",
+    "url": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/bets",
+    "quote": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/quote?outcome={outcome}&amount={amount}",
+    "lookup": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/lookup?ref={linkOrId}",
+    "market": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}",
+    "markets": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets",
+    "draft": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/draft",
+    "byTweet": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/by-tweet/{tweetId}",
+    "resolve": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/resolve",
+    "void": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/void",
+    "results": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/results",
+    "creator": "https://bazaar.playhunch.xyz/api/bazaar/v1/creators/{walletOrHandle}",
+    "toResolve": "https://bazaar.playhunch.xyz/api/bazaar/v1/creators/{walletOrHandle}/to-resolve",
+    "positions": "https://bazaar.playhunch.xyz/api/bazaar/v1/positions?wallet={wallet}",
+    "register": "https://bazaar.playhunch.xyz/api/bazaar/v1/register",
+    "earnings": "https://bazaar.playhunch.xyz/api/bazaar/v1/earnings",
+    "refLink": "https://bazaar.playhunch.xyz/api/bazaar/v1/ref/register",
+    "fees": "https://bazaar.playhunch.xyz/api/bazaar/v1/fees",
+    "gettingStarted": "https://bazaar.playhunch.xyz/api/bazaar/v1/getting-started",
+    "boards": "https://bazaar.playhunch.xyz/api/bazaar/boards",
+    "mcp": "https://bazaar.playhunch.xyz/api/bazaar/mcp"
+  },
+  "payment": {
+    "scheme": "exact",
+    "network": "base",
+    "asset": "USDC",
+    "assetAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "payTo": "0x4F0d7622984b38DfB2D1F86F10eEE564566C09F2",
+    "minAmountUsd": 0.5,
+    "extra": { "name": "USD Coin", "version": "2" }
+  },
+  "allowedOrigins": ["https://bazaar.playhunch.xyz"],
+  "signingPolicy": {
+    "$comment": "Pin-check EVERY x402 challenge and EVERY wallet-proof message against these values BEFORE signing. On any mismatch or missing field, ABORT: do not sign, do not retry blindly. A spoofed or compromised upstream must never redirect funds, swap the asset, inflate the amount, or get a signature over any text but Bazaar's own proof for the request being sent. Pin from here, not from the challenge.",
+    "requireScheme": "exact",
+    "requireAuthorization": "eip3009-transferWithAuthorization",
+    "pinned": {
+      "network": "base",
+      "chainId": 8453,
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "payTo": "0x4F0d7622984b38DfB2D1F86F10eEE564566C09F2",
+      "resourcePrefix": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/",
+      "resourceTemplate": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/bets",
+      "assetName": "USD Coin",
+      "assetVersion": "2"
+    },
+    "limits": {
+      "minAmountAtomic": "500000",
+      "maxValiditySeconds": 120
+    },
+    "preSignChecks": [
+      "x402Version === 1 and accepts[] holds exactly one entry; if accepts[] is empty or ambiguous, or any field below is absent, abort.",
+      "accepts[0].scheme === requireScheme ('exact'); else abort.",
+      "accepts[0].network === pinned.network ('base'); else abort.",
+      "accepts[0].asset === pinned.asset (Base USDC); else abort; never sign for any other token.",
+      "accepts[0].payTo === pinned.payTo; else abort; never sign a transfer to any other recipient.",
+      "accepts[0].resource === pinned.resourceTemplate with {marketId} = the market id the Bazaar API returned for the market being bet on (so it starts with pinned.resourcePrefix); else abort.",
+      "accepts[0].extra.name === pinned.assetName and accepts[0].extra.version === pinned.assetVersion; else abort.",
+      "accepts[0].maxAmountRequired is an integer string, >= limits.minAmountAtomic AND === the user-approved stake in atomic units; else abort; never sign any other amount. Hunch sets no maximum: Bankr's own limits apply and Bankr tells the user.",
+      "authorization is transferWithAuthorization ONLY, from walletAddress, to pinned.payTo, for exactly maxAmountRequired; never approve(), permit(), permit2, increaseAllowance, or any unlimited/blanket allowance.",
+      "bound validBefore to <= now + limits.maxValiditySeconds; one authorization per idempotencyKey: a retry of the same bet resends the SAME X-PAYMENT and never signs a new one.",
+      "Bazaar's only paid leg is a bet's stake: a 402 from any other Bazaar route (the retired /v1/bond and /v1/listing-fee answer 410) means abort."
+    ],
+    "walletProof": {
+      "$comment": "Writes that move no money (create, resolve, void, register, claim, share link) are authorized by an EIP-191 personal_sign over Bazaar's fixed 13-line message. The 401 wallet_proof_required response carries it as challenge.message. Sign it only when every check below passes, with the requesting user's own Bankr wallet, then resend the SAME body plus proof { signature, issuedAt, nonce }.",
+      "scheme": "eip191-personal-sign",
+      "signWith": "POST https://api.bankr.bot/wallet/sign {\"signatureType\":\"personal_sign\",\"message\":challenge.message} from the requesting user's own Bankr wallet",
+      "domainLine": "bazaar.playhunch.xyz asks you to sign a Bazaar action.",
+      "footerLine": "Free to sign. Sends no transaction. Accepted once, within 5 minutes of Issued At.",
+      "chainId": 8453,
+      "version": "1",
+      "lineCount": 13,
+      "windowSeconds": 300,
+      "actions": {
+        "create_market": { "intentPrefix": "create market \"", "market": "-" },
+        "resolve_market": { "intentPrefix": "resolve as \"", "market": "id" },
+        "void_market": { "intentPrefix": "void with note \"", "market": "id" },
+        "register_agent": { "intentPrefix": "register agent \"", "market": "-" },
+        "claim_earnings": { "intent": "claim earnings", "market": "-" },
+        "register_ref_link": { "intent": "mint a share link", "market": "id" }
+      },
+      "preSignChecks": [
+        "The response is a 401 with error wallet_proof_required and a challenge whose scheme is eip191-personal-sign; anything else, abort.",
+        "challenge.message is exactly 13 lines: line 1 === domainLine, lines 2 and 12 are empty, line 13 === footerLine; any other text anywhere, abort.",
+        "Action line === 'Action: <action>' where <action> is the write the user asked for and appears in actions (the skill never signs create_recurring, stop_recurring or any action not listed); else abort.",
+        "Intent line starts with 'Intent: ' + the action's intentPrefix (or equals 'Intent: ' + intent), and for a resolve it equals 'Intent: resolve as \"<the outcome key the user chose>\"'; else abort.",
+        "Market line === 'Market: <the market id the Bazaar API returned>' for market 'id' actions, and 'Market: -' for market '-' actions; else abort.",
+        "Wallet line === 'Wallet: <the requesting user's own Bankr wallet, lowercase>', the same wallet as the body's walletAddress; else abort.",
+        "Chain ID line === 'Chain ID: 8453' and Version line === 'Version: 1'; else abort.",
+        "Payload SHA-256 line equals the SHA-256 of the body being sent without its proof member, as canonical JSON (keys sorted, no whitespace), when the signer can compute it; the body is never changed after the challenge.",
+        "Issued At line === 'Issued At: ' + challenge.proof.issuedAt, within windowSeconds of now, and Nonce line === 'Nonce: ' + challenge.proof.nonce; else abort.",
+        "Sign with personal_sign only, never eth_signTypedData or a transaction, and never for any message that fails a check above. Any retry starts over without a proof and signs the fresh challenge, because a nonce works once."
+      ]
+    }
+  },
+  "request": {
+    "contentType": "application/json",
+    "body": {
+      "walletAddress": "0x… (the requesting user's own Bankr wallet; it must be the x402 payer)",
+      "outcomeKey": "one of market.outcomeKeys, as the API returned it",
+      "amount": "decimal USDC string, at least 0.50 (no maximum)",
+      "idempotencyKey": "8-128 chars; one per intended bet (on X: x-<mention post id>), reused verbatim on retries",
+      "refCode": "optional: the referralCode lookup returned for a shared link"
+    },
+    "headers": { "X-PAYMENT": "base64 x402 exact payload carrying the EIP-3009 transferWithAuthorization" }
+  },
+  "response": {
+    "201": "{ replayed: false, bet: { id, marketId, outcomeKey, stake, intoPool, createdAt }, payment: { network, txRef, simulated } } plus an X-Payment-Response header",
+    "200": "{ replayed: true, bet, payment }: this bet already stands and was not charged again",
+    "402": "x402 challenge for exactly the stake, payable to the settlement address, resource = this market's bet endpoint",
+    "400": "payment_invalid (wrong amount, recipient or validity window), unknown_outcome, invalid_request, bet_below_minimum",
+    "403": "payment_payer_mismatch (the payer is not walletAddress) or agent_not_registered (register once, with a wallet proof)",
+    "409": "payment_replayed (resend the same request shortly; never sign a new authorization), market_closed, bet_locked",
+    "428": "terms_not_accepted (registering records the terms)",
+    "503": "settlement_failed (resend the SAME X-PAYMENT), settlement_unconfigured (nothing was charged), bet_not_recorded (the body carries refund details)"
+  },
+  "retired": {
+    "bond": "POST /api/bazaar/v1/bond answers 410 agent_bond_retired; never pay it.",
+    "listingFee": "POST /api/bazaar/v1/listing-fee answers 410 listing_fee_retired; never pay it."
+  }
+}

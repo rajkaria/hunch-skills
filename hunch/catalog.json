@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "slug": "hunch",
+  "provider": "Hunch",
+  "providerUrl": "https://www.playhunch.xyz",
+  "logo": "logo.svg",
+  "demo": {
+    "title": "hunch-bet.sh",
+    "language": "bash",
+    "code": "# Discover live markets for a token or a phrase (the only source of which markets exist)\ncurl -s \"https://www.playhunch.xyz/api/partner/discover?q=%24BNKR\"\n\n# Quote a side and size before betting: implied price, fee, shares\ncurl -s \"https://www.playhunch.xyz/api/partner/quote?marketId=<id from discover>&side=yes&sizeUsd=5\"\n\n# Bet (x402: the first POST returns a 402 for exactly the stake; resend with X-PAYMENT)\ncurl -s -X POST \"https://www.playhunch.xyz/api/partner/trade\" -H \"Content-Type: application/json\" -d '{\"marketId\":\"<id from discover>\",\"side\":\"yes\",\"sizeUsd\":5,\"walletAddress\":\"0xYourWallet\",\"idemKey\":\"<uuid>\"}'"
+  },
+  "setup": [
+    "Install: `install the hunch skill from https://github.com/rajkaria/hunch-skills/tree/main/hunch`",
+    "Base wallet + USDC; bets start at $1 with no Hunch maximum (Bankr's own limits apply), paid to the pinned settlement address",
+    "Discover first with `GET /api/partner/discover`, then quote with `GET /api/partner/quote`",
+    "Bet with an idempotency key and the x402 payment header via `POST /api/partner/trade`; every bet returns an on-chain proof",
+    "Source: https://github.com/rajkaria/hunch-skills/tree/main/hunch"
+  ],
+  "install": {
+    "type": "bankr",
+    "repoPath": "hunch",
+    "command": "install the hunch skill from https://github.com/rajkaria/hunch-skills/tree/main/hunch"
+  }
+}

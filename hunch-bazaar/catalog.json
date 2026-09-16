@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "slug": "hunch-bazaar",
+  "provider": "Hunch",
+  "providerUrl": "https://bazaar.playhunch.xyz",
+  "logo": "logo.svg",
+  "demo": {
+    "title": "bazaar.sh",
+    "language": "bash",
+    "code": "# Trending markets anyone opened: odds and pool size on every row\ncurl -s \"https://bazaar.playhunch.xyz/api/bazaar/v1/markets?sort=trending&limit=5\"\n\n# One market card from a pasted link: who settles it and their record\ncurl -s \"https://bazaar.playhunch.xyz/api/bazaar/v1/markets/lookup?ref=https%3A%2F%2Fbazaar.playhunch.xyz%2Fmarkets%2F<id>\"\n\n# Quote a bet: payout, multiple and fee from the settlement engine\ncurl -s \"https://bazaar.playhunch.xyz/api/bazaar/v1/markets/<id>/quote?outcome=yes&amount=5.00\"\n\n# Bet (x402: the first POST returns a 402 for exactly the stake; resend with X-PAYMENT)\ncurl -s -X POST \"https://bazaar.playhunch.xyz/api/bazaar/v1/markets/<id>/bets\" -H \"Content-Type: application/json\" -d '{\"walletAddress\":\"0xYourWallet\",\"outcomeKey\":\"yes\",\"amount\":\"5.00\",\"idempotencyKey\":\"<uuid>\"}'"
+  },
+  "setup": [
+    "Install: `install the hunch-bazaar skill from https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar`",
+    "Base wallet + USDC; a bet is $0.50 minimum with no Hunch maximum (Bankr's own limits apply), paid to the pinned settlement address",
+    "Make a market: preview with `POST /api/bazaar/v1/markets/draft`, then create with its confirm body and a free personal_sign wallet proof",
+    "Only the creator can resolve or void, with a wallet proof; a market unresolved 48h past its deadline refunds every bettor",
+    "Source: https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar"
+  ],
+  "install": {
+    "type": "bankr",
+    "repoPath": "hunch-bazaar",
+    "command": "install the hunch-bazaar skill from https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar"
+  }
+}
