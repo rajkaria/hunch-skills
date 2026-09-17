@@ -130,13 +130,26 @@ body:
     "intoPool": { "amount": "5.00", "micros": "5000000" },
     "createdAt": "..."
   },
-  "payment": { "network": "base", "txRef": "0x...", "simulated": false }
+  "payment": { "network": "base", "txRef": "0x...", "simulated": false },
+  "replyText": "Bet placed: $5.00 on YES. https://basescan.org/tx/0x...\nYES is now 65% of a $55.00 pool."
 }
 ```
 
-`txRef` is the Base transaction that moved the stake; link it as
-`https://basescan.org/tx/<txRef>`. A `200` with `replayed: true` is a bet that
-already stood: it was not charged again, so report it and never pay again.
+Post `replyText`: the stake, the Basescan link for `txRef` (the Base transaction
+that moved the stake) and the side's share of the pool right after the bet. A
+`200` with `replayed: true` is a bet that already stood: it was not charged again,
+its `replyText` says so, and it is never paid again.
+
+## Bets under a standing bet
+
+A bet a standing bet places is this same flow with one more field,
+`standingBetId`, and with `outcomeKey`, `amount` and `idempotencyKey` taken exactly
+from `GET /api/bazaar/v1/standing-bets/{id}/check` → `bet` (the key is
+`sb:<grant>:<market>:<period>`). The route checks the bet against the grant before
+any 402, so a bet the grant does not allow is refused with nothing charged; on the
+paid leg it reserves the grant's fill before relaying the stake and releases it if
+nothing is charged. `node scripts/bazaar.mjs standing-bet-run --id <id>` does check
+and bet in one command. See `references/standing-bets.md`.
 
 ## Errors
 

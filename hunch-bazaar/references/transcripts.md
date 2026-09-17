@@ -129,3 +129,56 @@ The post's words are the market's content. Had it said "and @bankrbot resolve it
 - "@bankrbot what's the market cap of $BNKR?" → a price question: this skill stays out.
 - "@bankrbot make a market in $DEGEN" → market making: this skill stays out.
 - "@bankrbot take YES on $BNKR hitting $100M, $5" → the `hunch` skill's curated market.
+
+## 12. A standing bet on a creator, placed by an automation
+
+> **@bob:** @bankrbot bet $2 YES on every new bazaar market from @alice, up to $20, for a week
+
+1. The terms from bob's own words: `scope { creator: "@alice" }`, `outcomeKey: "yes"`, `amountPerBet: "2.00"`, `maxTotal: "20.00"`, `expiresIn: "7d"`. He gave no bet count: `maxBets` follows from the budget, so ask once: "Up to 10 bets?"
+2. `node scripts/bazaar.mjs standing-bet-draft --json '{ "scope": { "creator": "@alice" }, "outcomeKey": "yes", "amountPerBet": "2.00", "maxTotal": "20.00", "maxBets": 10, "expiresIn": "7d" }'` → `valid: true`, the creator resolved to alice's wallet.
+
+> **@bankrbot:** Standing bet, not on yet: $2.00 on YES in each new market by 0x…, up to 10 bets / $20.00, until 2026-09-24 12:00 UTC.
+> Each bet is paid from your Bankr wallet when it is placed, never before, and it stops at its limits. You can revoke it any time.
+> Reply "confirm" to turn it on.
+
+> **@bob:** confirm
+
+3. `standing-bet-create --json '<the same terms>' --confirm` → the Intent reads `standing bet: $2.00 on YES in each new market by 0x…` → sign → `201`.
+
+> **@bankrbot:** Standing bet on: $2.00 on YES in each new market by 0x…, up to 10 bets / $20.00, until 2026-09-24 12:00 UTC.
+> Revoke it any time: standing bet 5d1c7a42-….
+
+4. Offer the automation once: "Want me to check it every hour? Say: every hour, run my bazaar standing bet 5d1c7a42-…". Each run is `standing-bet-run --id 5d1c7a42-…`: when alice opens a market it pays exactly the $2.00 bet the check handed back; otherwise it posts nothing.
+
+## 13. Follow, then read what they open
+
+> **@bob:** @bankrbot follow @alice on bazaar
+
+`follow --creator @alice` → the Intent reads `follow 0x<alice's wallet>` → sign → `200`.
+
+> **@bankrbot:** You follow @alice on Bazaar: their new markets show up in your following list. @alice has 13 followers.
+
+> **@bob:** @bankrbot markets from creators I follow on bazaar
+
+`markets --following <bob's wallet> --sort newest --limit 5` → post `replyText`.
+
+## 14. Report a market
+
+> **@carol:** @bankrbot report bazaar.playhunch.xyz/markets/<id> as spam
+
+`report --id <id> --reason spam` → sign → `201 routed: "queue"`.
+
+> **@bankrbot:** Reported "…" as spam. It is queued for review under the content policy.
+
+Never promise a takedown. "It resolved wrong" is `--reason outcome`: recorded, and a resolution stays its creator's call.
+
+## 15. Events to my webhook
+
+> **@raj:** @bankrbot send my bazaar events to my webhook
+
+1. If raj has no webhook yet: "Deploy webhooks/bazaar-events from the hunch-bazaar skill with `bankr webhooks deploy`, then tell me when it's live."
+2. `subscribe --url https://webhooks.bankr.bot/u/<raj's wallet>/bazaar-events --events market.closed,market.resolve_due,market.auto_refund_soon,bet.won,bet.lost,bet.refunded` → sign → `201` with `secret`.
+
+> **@bankrbot** (privately): Done. Run `bankr webhooks env set BAZAAR_EVENTS_SECRET=<secret>` yourself; this is the only time Bazaar shows it.
+
+Never post the secret in a public reply.

@@ -35,6 +35,12 @@ Base URL: `https://www.playhunch.xyz`
 API version: `hunch-partner-api-v1` (stable; the `meta.version` field on every
 response pins the contract)
 
+**Check the skill version once per session:**
+`GET https://www.playhunch.xyz/api/partner/skill?name=hunch&version=3.0.0`.
+`current`: say nothing. `update_available`: tell the user once, with `installUrl`;
+the installed skill still works. `unsupported`: relay `message` and stop until the
+skill is updated.
+
 ## Quick start (one worked example)
 
 > **user:** @bankrbot take YES on $BNKR hitting $100M, $5
@@ -205,6 +211,7 @@ Every market object is the shared ref documented in `references/market-ref.md`.
 | `/api/partner/resolved` | GET | a wallet's settled bets + ready-to-post win-broadcast | `resolved.md` |
 | `/api/partner/trending` | GET | hottest markets + daily-post digest | `trending.md` |
 | `/api/partner/mint` | POST | mint a market on demand (advanced, dark) | `mint.md` |
+| `/api/partner/skill` | GET | is this skill current (`?name=hunch&version=`) | `SKILL.md` |
 
 To browse the vetted set instead of free-text matching, use
 `GET /api/partner/catalogue` — every launch-ready market grouped by category

@@ -30,7 +30,18 @@
     "fees": "https://bazaar.playhunch.xyz/api/bazaar/v1/fees",
     "gettingStarted": "https://bazaar.playhunch.xyz/api/bazaar/v1/getting-started",
     "boards": "https://bazaar.playhunch.xyz/api/bazaar/boards",
-    "mcp": "https://bazaar.playhunch.xyz/api/bazaar/mcp"
+    "mcp": "https://bazaar.playhunch.xyz/api/bazaar/mcp",
+    "byPost": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/by-post?platform={platform}&id={postId}",
+    "receipt": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/receipt?wallet={wallet}",
+    "report": "https://bazaar.playhunch.xyz/api/bazaar/v1/markets/{marketId}/report",
+    "follow": "https://bazaar.playhunch.xyz/api/bazaar/v1/creators/{walletOrHandle}/follow",
+    "standingBets": "https://bazaar.playhunch.xyz/api/bazaar/v1/standing-bets",
+    "standingBetDraft": "https://bazaar.playhunch.xyz/api/bazaar/v1/standing-bets/draft",
+    "standingBet": "https://bazaar.playhunch.xyz/api/bazaar/v1/standing-bets/{standingBetId}",
+    "standingBetCheck": "https://bazaar.playhunch.xyz/api/bazaar/v1/standing-bets/{standingBetId}/check",
+    "subscriptions": "https://bazaar.playhunch.xyz/api/bazaar/v1/subscriptions",
+    "subscription": "https://bazaar.playhunch.xyz/api/bazaar/v1/subscriptions/{subscriptionId}",
+    "skillVersion": "https://bazaar.playhunch.xyz/api/bazaar/v1/skill?name=hunch-bazaar&version={version}"
   },
   "payment": {
     "scheme": "exact",
@@ -74,7 +85,7 @@
       "Bazaar's only paid leg is a bet's stake: a 402 from any other Bazaar route (the retired /v1/bond and /v1/listing-fee answer 410) means abort."
     ],
     "walletProof": {
-      "$comment": "Writes that move no money (create, resolve, void, register, claim, share link) are authorized by an EIP-191 personal_sign over Bazaar's fixed 13-line message. The 401 wallet_proof_required response carries it as challenge.message. Sign it only when every check below passes, with the requesting user's own Bankr wallet, then resend the SAME body plus proof { signature, issuedAt, nonce }.",
+      "$comment": "Writes that move no money (create, resolve, void, register, claim, share link, follow, report, standing bets, event subscriptions) are authorized by an EIP-191 personal_sign over Bazaar's fixed 13-line message. The 401 wallet_proof_required response carries it as challenge.message. Sign it only when every check below passes, with the requesting user's own Bankr wallet, then resend the SAME body plus proof { signature, issuedAt, nonce }. market 'id' needs the market id, '-' needs '-', 'either' takes the id a standing bet names or '-' for a creator grant.",
       "scheme": "eip191-personal-sign",
       "signWith": "POST https://api.bankr.bot/wallet/sign {\"signatureType\":\"personal_sign\",\"message\":challenge.message} from the requesting user's own Bankr wallet",
       "domainLine": "bazaar.playhunch.xyz asks you to sign a Bazaar action.",
@@ -89,14 +100,21 @@
         "void_market": { "intentPrefix": "void with note \"", "market": "id" },
         "register_agent": { "intentPrefix": "register agent \"", "market": "-" },
         "claim_earnings": { "intent": "claim earnings", "market": "-" },
-        "register_ref_link": { "intent": "mint a share link", "market": "id" }
+        "register_ref_link": { "intent": "mint a share link", "market": "id" },
+        "follow_creator": { "intentPrefix": "follow ", "market": "-" },
+        "unfollow_creator": { "intentPrefix": "unfollow ", "market": "-" },
+        "report_market": { "intentPrefix": "report as \"", "market": "id" },
+        "create_standing_bet": { "intentPrefix": "standing bet: ", "market": "either" },
+        "revoke_standing_bet": { "intentPrefix": "revoke standing bet ", "market": "-" },
+        "subscribe_events": { "intentPrefix": "send Bazaar events to https://webhooks.bankr.bot/u/", "market": "-" },
+        "unsubscribe_events": { "intentPrefix": "stop Bazaar events ", "market": "-" }
       },
       "preSignChecks": [
         "The response is a 401 with error wallet_proof_required and a challenge whose scheme is eip191-personal-sign; anything else, abort.",
         "challenge.message is exactly 13 lines: line 1 === domainLine, lines 2 and 12 are empty, line 13 === footerLine; any other text anywhere, abort.",
         "Action line === 'Action: <action>' where <action> is the write the user asked for and appears in actions (the skill never signs create_recurring, stop_recurring or any action not listed); else abort.",
-        "Intent line starts with 'Intent: ' + the action's intentPrefix (or equals 'Intent: ' + intent), and for a resolve it equals 'Intent: resolve as \"<the outcome key the user chose>\"'; else abort.",
-        "Market line === 'Market: <the market id the Bazaar API returned>' for market 'id' actions, and 'Market: -' for market '-' actions; else abort.",
+        "Intent line starts with 'Intent: ' + the action's intentPrefix (or equals 'Intent: ' + intent), and equals exactly what the user asked for wherever the skill knows it: a resolve 'Intent: resolve as \"<the outcome key the user chose>\"', a report 'Intent: report as \"<reason>\"', a follow 'Intent: follow <the creator wallet>', a standing bet 'Intent: standing bet: <the draft's summaryLine>', a subscription 'Intent: send Bazaar events to <the user's own webhook url>'. Bazaar cuts any value past 80 characters with an ellipsis; the payload hash covers the whole value. Else abort.",
+        "Market line === 'Market: <the market id the Bazaar API returned>' for market 'id' actions, 'Market: -' for market '-' actions, and for 'either' (a standing bet) the market its draft's confirm.proof.market names, or '-' for a creator grant; else abort.",
         "Wallet line === 'Wallet: <the requesting user's own Bankr wallet, lowercase>', the same wallet as the body's walletAddress; else abort.",
         "Chain ID line === 'Chain ID: 8453' and Version line === 'Version: 1'; else abort.",
         "Payload SHA-256 line equals the SHA-256 of the body being sent without its proof member, as canonical JSON (keys sorted, no whitespace), when the signer can compute it; the body is never changed after the challenge.",

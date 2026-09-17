@@ -4,6 +4,10 @@ Every call targets `https://bazaar.playhunch.xyz`. Reads are keyless `GET`s.
 Money is `{ "amount": "5.00", "micros": "5000000" }`: quote `amount`, compare
 `micros`, never floats. Response `version` is `bazaar-agent-api-v1`.
 
+**Every response below also carries `replyText`**: the ready-to-post reply the
+skill posts verbatim (`references/replies.md`). The fields are for decisions and
+checks, never for rebuilding a sentence.
+
 ## Market card: `GET /api/bazaar/v1/markets/lookup?ref=` and `GET /api/bazaar/v1/markets/{id}`
 
 `ref` is a pasted Bazaar link (`bazaar.playhunch.xyz/markets/<x>`, `/quick/<x>`,
@@ -156,3 +160,73 @@ Money is `{ "amount": "5.00", "micros": "5000000" }`: quote `amount`, compare
 
 - `board`: `weekly`, `season`, `alltime`, `category`, `rising`.
 - `board`, `weekKey`, `rows [{ rank, creatorId, handle, tier, score }]`.
+
+## The market a post created: `GET /api/bazaar/v1/markets/by-post?platform=&id=`
+
+- `platform`: `x` (a numeric post id), `farcaster` (a `0x…` cast hash) or `telegram`
+  (`<chat id>:<message id>`). Same answer shape as by-tweet; public markets only.
+- A draft or create names its post as `sourcePost: { platform, id }` (`sourceTweetId`
+  still means an X post). Every market read names it back as `sourcePost { platform, id, url }`.
+
+## Following: `GET|POST|DELETE /api/bazaar/v1/creators/{id}/follow`
+
+- GET `?wallet=` → `creator { creatorId, wallet, handle }`, `wallet`, `following`,
+  `followers`, `replyText` (null without a wallet).
+- POST / DELETE body `{ walletAddress }` with a wallet proof (`follow_creator` /
+  `unfollow_creator`) whose Intent is `follow <creator.wallet, or creatorId>`.
+  Idempotent. A reference that names nobody is `404 creator_not_found` before any
+  signature; following yourself is refused.
+- `GET /api/bazaar/v1/markets?following=<wallet>` keeps the creators that wallet
+  follows and echoes `following { wallet, creatorCount }`.
+
+## Report: `POST /api/bazaar/v1/markets/{id}/report` (wallet proof `report_market`)
+
+- Body `{ walletAddress, reason, note?, evidence? }`; `reason` is one of `illegal`,
+  `harm`, `sexual`, `hate`, `impersonation`, `spam`, `other`, `outcome`.
+- `201 { reportId, marketId, state, routed: "queue" | "corpus", replayed: false }`;
+  a second report by the same wallet is `200 replayed: true`. `outcome` reports are
+  recorded (`corpus`) and never queued.
+
+## Win receipt: `GET /api/bazaar/v1/markets/{id}/receipt?wallet=`
+
+- `winner: true`: `outcome`, `stake`, `payout`, `payoutState` (`paid`, `pending`,
+  `held`, `unpayable`), `payoutNote`, `fees { model, bps, protocol }`, `multiplier`,
+  `receiptImageUrl`, `shareUrl` (ref-stamped), `shareText` (the winner's own post).
+- `winner: false` with `reason: "not_resolved" | "no_winnings"`.
+
+## Positions summary
+
+`GET /api/bazaar/v1/positions?wallet=` adds `summary { usdc, pusdc }`, each with
+`markets`, `staked`, `paidOut`, `refunded`, `pending`, `held`, `netOnSettled`,
+`marketsWon`, `marketsLost`, `marketsRefunded`, `marketsOpen`, `winRatePct` (over
+decided markets, null before any). Real and practice money are never added together.
+
+## Standing bets: `/api/bazaar/v1/standing-bets`
+
+- `POST …/draft` → `valid`, `issues [{ field, code, message }]`, `standingBet`,
+  `summaryLine`, `market`, `limits`, `confirm { method, url, body, proof { action, market, intent } }`.
+- `POST …` (wallet proof `create_standing_bet`) → `201 standingBet`.
+- `GET …?wallet=` → `count`, `activeCount`, `maxActive`, `standingBets []`.
+- `GET …/{id}` → `standingBet`, `fills [{ marketId, periodKey, amount, status, betId }]`.
+- `DELETE …/{id}` (wallet proof `revoke_standing_bet`) → `revoked`, `standingBet`.
+- `GET …/{id}/check` → `status`, `reason`, `message`, `bet { standingBetId, marketId,
+  outcomeKey, amount, idempotencyKey, periodKey, url, body }`, `oddsPct`, `usage`, `remaining`.
+- A `standingBet` carries `id`, the terms, `summaryLine`, `status` (`active`,
+  `exhausted`, `expired`, `revoked`), `usage { bets, spent, placedBets, placed,
+  inFlightBets, inFlight }`, `remaining { bets, total }` and `links`.
+
+Full contract: `references/standing-bets.md`.
+
+## Event subscriptions: `/api/bazaar/v1/subscriptions`
+
+- `POST` (wallet proof `subscribe_events`) → `201 subscription`, `secret` (once), `spec`.
+- `GET ?wallet=` → `subscriptions [{ id, url, name, events, status, consecutiveFailures,
+  lastDeliveredAt }]`, `spec`.
+- `DELETE /{id}` (wallet proof `unsubscribe_events`) → `revoked`, `subscription`.
+
+Full contract: `references/events.md`.
+
+## Skill version: `GET /api/bazaar/v1/skill?name=hunch-bazaar&version=`
+
+- `name`, `version`, `latestVersion`, `minSupportedVersion`, `status` (`current`,
+  `update_available`, `unsupported`), `installUrl`, `message`.

@@ -72,28 +72,41 @@ Free to sign. Sends no transaction. Accepted once, within 5 minutes of Issued At
 | `register_ref_link` | `POST /api/bazaar/v1/ref/register` | the body's `marketId` | `mint a share link` | yes |
 | `create_recurring` | `POST /api/bazaar/v1/markets/{id}/recurring` | the market id | `start a <cadence> recurring stream` | never |
 | `stop_recurring` | `DELETE /api/bazaar/v1/markets/{id}/recurring` | the market id | `stop the recurring stream` | never |
+| `follow_creator` | `POST /api/bazaar/v1/creators/{id}/follow` | `-` | `follow <creator wallet lowercase>` | yes |
+| `unfollow_creator` | `DELETE /api/bazaar/v1/creators/{id}/follow` | `-` | `unfollow <creator wallet lowercase>` | yes |
+| `report_market` | `POST /api/bazaar/v1/markets/{id}/report` | the market id | `report as "<reason>"` | yes |
+| `create_standing_bet` | `POST /api/bazaar/v1/standing-bets` | the body's `scope.marketId`, or `-` | `standing bet: <server summary line>` | yes |
+| `revoke_standing_bet` | `DELETE /api/bazaar/v1/standing-bets/{id}` | `-` | `revoke standing bet <id>` | yes |
+| `subscribe_events` | `POST /api/bazaar/v1/subscriptions` | `-` | `send Bazaar events to <url>` | yes |
+| `unsubscribe_events` | `DELETE /api/bazaar/v1/subscriptions/{id}` | `-` | `stop Bazaar events <id>` | yes |
 
 An Intent value is the body field with control characters and repeated spaces
 collapsed, double quotes turned into single quotes, and cut to 80 characters
-followed by an ellipsis; a missing field is `-`.
+followed by an ellipsis; a missing field is `-`. A follow's Intent names the
+creator from the path instead: their wallet in lowercase, or the `creatorId`
+`GET /api/bazaar/v1/creators/{id}` returns for a creator without one.
+A standing bet's Intent is the server's own summary line for the body (the
+`summaryLine` `POST /api/bazaar/v1/standing-bets/draft` returns), never cut: sign
+the draft's `confirm.body` with its `confirm.proof.intent`, or the message a 401
+challenge carries.
 
 ## Canonical JSON and the payload hash
 
 `Payload SHA-256` is the lowercase hex SHA-256 of the UTF-8 canonical JSON of the
 request body without its top-level `proof` member: object keys sorted ascending,
-no whitespace, `undefined` members dropped, arrays kept in order. `jq -S -c
-'del(.proof)'` produces it for these bodies, which hold only strings, arrays and
-objects.
+no whitespace, `undefined` members dropped, arrays kept in order, numbers as
+JavaScript's `JSON.stringify` writes them. `canonicalJson` in `scripts/bazaar.mjs` is
+exactly the server's algorithm.
 
 ## Before you sign
 
 Sign only when every line holds. These mirror `x402-registry.json` →
-`signingPolicy.walletProof.preSignChecks`, and `scripts/lib/common.sh` →
-`bz_check_proof_challenge` runs them for the wrappers.
+`signingPolicy.walletProof.preSignChecks`, and `scripts/bazaar.mjs` →
+`checkProofChallenge` runs them for every command.
 
 1. The response is `401 wallet_proof_required` and `challenge.scheme` is `eip191-personal-sign`.
 2. `challenge.message` is exactly 13 lines. Line 1 is the domain line, lines 2 and 12 are empty, line 13 is the free-to-sign line. No other text anywhere.
-3. `Action:` is the write the user asked for, and it is one of the six actions this skill signs.
+3. `Action:` is the write the user asked for, and it is one of the thirteen actions this skill signs.
 4. `Intent:` matches it: the exact intent for claim and share link, the action's prefix otherwise, and for a resolve exactly `resolve as "<the outcome key the user chose>"`.
 5. `Market:` is the market id the Bazaar API returned for the market being acted on, or `-` for create, register and claim.
 6. `Wallet:` is the requesting user's own Bankr wallet, lowercase, and equals the body's `walletAddress`.
