@@ -181,3 +181,12 @@ and bet in one command. See `references/standing-bets.md`.
 - **Fail closed.** No settlement address, a closed market, or a payer, amount or
   recipient mismatch: no relay and no bet.
 - **Paper (pUSDC) markets** take no payment; the skill does not use them.
+
+
+Payment state is permanent, scoped by wallet plus a hash of the full idempotency
+key. One atomic directory lock spans challenge, signature persistence and paid
+request. Records are atomically renamed and fsynced. Completed results remain;
+a later retry never signs again. A pending marker is written before calling the
+signer; if that call or persistence is uncertain, stop for reconciliation.
+Never clear state, change state directories, steal locks or choose a new key as
+a payment-retry workaround. Keep every wallet runner on one durable shared host.

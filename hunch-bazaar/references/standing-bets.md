@@ -53,12 +53,19 @@ issue, the `summaryLine` and a `confirm` block:
 }
 ```
 
-The confirm body names the creator by wallet and the expiry as an absolute time, so
-what the user confirms is exactly the grant. On confirm, POST that body with a
-wallet proof whose Intent is `standing bet: <summaryLine>` and whose Market is the
-body's `scope.marketId`, or `-` for a creator grant. `node scripts/bazaar.mjs
-standing-bet-create --json '<terms>' --confirm` does both steps and checks the
-Intent before signing.
+The script persists the normalized body, SHA-256, a five-minute confirmation
+expiry and authenticated requesting-user/wallet binding. Display `approvedBody`
+as well as `replyText` and retain `previewId`. Confirm only with:
+
+```sh
+node scripts/bazaar.mjs standing-bet-create --preview-id <previewId> --confirm
+```
+
+There is no confirmation-time draft call. Expired or changed terms require a
+fresh displayed preview and separate user confirmation. A successful creation
+retains the exact locally approved grant keyed by wallet and returned grant id.
+Unknown grants are refused. Retries of confirmation return the retained result;
+uncertain outcomes require reconciliation, never blind recreation.
 
 ## Check, then bet
 
@@ -92,3 +99,18 @@ for an automation.
 - `DELETE /api/bazaar/v1/standing-bets/{id}` with `{ walletAddress, standingBetId }`
   and a wallet proof (`revoke_standing_bet`, Intent `revoke standing bet <id>`). The
   body's id must equal the path's. Idempotent; placed bets stand.
+
+## Client authorization boundary
+
+The signer checks the retained grant independently of `/check`: authenticated
+owner/wallet, exact outcome and amount, market/creator scope, absolute expiry,
+local revocation, cadence-derived key and optional odds trigger. Budget and count
+are reserved under a per-grant directory lock before signing. Concurrent distinct
+intents cannot exceed either bound; retries reuse their reservation and payment.
+Uncertain/failed attempts remain reserved, conservatively. A revoke marks the
+local grant stopped before calling the server, even if that request fails.
+
+Creator membership/creation time and odds are checked against the market card;
+those facts still depend on the Hunch operator. All wallet runners must share
+one durable state directory on one host. Do not delete records or locks to retry.
+Use the same trusted `BAZAAR_REQUESTING_USER` for approval and scheduled runs.

@@ -29,7 +29,7 @@
 // supplied can add, drop or rename a field.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, fsyncSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 export const ORIGIN = "https://bazaar.playhunch.xyz";
 export const BANKR_API = "https://api.bankr.bot";
 export const SKILL_NAME = "hunch-bazaar";
-export const SKILL_VERSION = "3.0.0";
+export const SKILL_VERSION = "3.0.1";
 
 const PROOF_DOMAIN_LINE = "bazaar.playhunch.xyz asks you to sign a Bazaar action.";
 const PROOF_FOOTER_LINE =
@@ -383,6 +383,142 @@ function stateDir(rt) {
   return dir;
 }
 
+// State must live on one durable local filesystem shared by all wallet runners.
+// Locks are never stolen: a crashed process requires operator reconciliation.
+const digest = (value) => createHash("sha256").update(canonicalJson(value)).digest("hex");
+function statePath(rt, kind, key) { return join(stateDir(rt), `${kind}-${digest(key)}.json`); }
+function readState(path) { return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null; }
+function saveState(path, value) {
+  const tmp = `${path}.${randomBytes(12).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", 0o600);
+  try { writeFileSync(fd, JSON.stringify(value)); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(tmp, path);
+  const dir = openSync(dirname(path), "r");
+  try { fsyncSync(dir); } finally { closeSync(dir); }
+}
+async function locked(path, fn) {
+  const lock = `${path}.lock`;
+  let acquired = false;
+  for (let n = 0; n < 100; n++) {
+    try { mkdirSync(lock, { mode: 0o700 }); acquired = true; break; }
+    catch (e) { if (e.code !== "EEXIST") throw e; }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!acquired) fail("state is locked by another run; retry later; never delete locks without reconciliation");
+  try { return await fn(); } finally { rmSync(lock, { recursive: true }); }
+}
+function owner(rt) {
+  const user = rt.env.BAZAAR_REQUESTING_USER;
+  if (typeof user !== "string" || !/^[A-Za-z0-9_:@.-]{1,160}$/.test(user))
+    fail("BAZAAR_REQUESTING_USER must be the authenticated requesting user's stable id");
+  return { wallet: requireWalletEnv(rt), user };
+}
+function validateGrant(body, now) {
+  const scope = body.scope;
+  if (!scope || Object.keys(scope).length !== 1 ||
+      !(typeof scope.marketId === "string" && MARKET_REF_RE.test(scope.marketId) ||
+        typeof scope.creator === "string" && WALLET_RE.test(scope.creator))) fail("invalid standing scope");
+  const amount = BigInt(usdcMicros(body.amountPerBet));
+  if (amount < 500000n || BigInt(usdcMicros(body.maxTotal)) < amount ||
+      !Number.isInteger(body.maxBets) || body.maxBets < 1 || body.maxBets > 100 ||
+      typeof body.outcomeKey !== "string" || !OUTCOME_RE.test(body.outcomeKey) ||
+      !["once_per_market", "daily"].includes(body.cadence) ||
+      (body.cadence === "daily" && !scope.marketId) ||
+      !(Date.parse(body.expiresAt) > now && Date.parse(body.expiresAt) <= now + 30 * 86400000))
+    fail("invalid standing limits or expiry");
+  if (body.trigger != null) {
+    if (typeof body.trigger !== "object" || Array.isArray(body.trigger)) fail("invalid trigger");
+    for (const [key, value] of Object.entries(body.trigger)) {
+      if (!["oddsBelowPct", "oddsAbovePct"].includes(key) || !Number.isInteger(value) || value < 1 || value > 99)
+        fail("invalid trigger");
+    }
+  }
+}
+async function previewCreate(rt, f, standing = false) {
+  const binding = owner(rt);
+  const kind = standing ? "standing-bets" : "markets";
+  if (f.confirm !== "true") {
+    const preview = await bazaarHttp(rt, "POST", `/api/bazaar/v1/${kind}/draft`, {
+      body: { ...jsonFlag(f), walletAddress: binding.wallet },
+    });
+    if (preview.status !== 200 || preview.json?.valid !== true) return preview;
+    const body = preview.json.confirm?.body;
+    if (!body || body.walletAddress?.toLowerCase() !== binding.wallet || body.proof) fail("invalid preview wallet/body");
+    if (standing) validateGrant(body, rt.now());
+    const expiry = Math.min(rt.now() + 300000, standing ? Date.parse(body.expiresAt) : Date.parse(preview.json.confirm.confirmBy));
+    if (!(expiry > rt.now())) fail("preview expired; request a fresh preview");
+    const id = randomBytes(24).toString("hex");
+    const record = { binding, kind, body, hash: payloadSha256(body), expiry, summary: preview.json.summaryLine, createdAt: rt.now() };
+    saveState(statePath(rt, "preview", id), record);
+    return { ...preview, json: { ...preview.json, previewId: id, approvedBody: body, approvedBodySha256: record.hash, previewExpiresAt: new Date(expiry).toISOString() } };
+  }
+  const id = need(f, "preview-id", /^[a-f0-9]{48}$/, "--confirm requires the --preview-id shown to this same user");
+  if (f.json) fail("confirm uses only the retained --preview-id; new terms require a new preview");
+  const path = statePath(rt, "preview", id);
+  return locked(path, async () => {
+    const kept = readState(path);
+    if (!kept || canonicalJson(kept.binding) !== canonicalJson(binding) || kept.kind !== kind) fail("unknown preview or requesting user/wallet mismatch");
+    if (kept.result) return kept.result;
+    if (kept.pending) fail("confirmation outcome uncertain; reconcile before creating another grant/market");
+    if (!(kept.expiry > rt.now()) || payloadSha256(kept.body) !== kept.hash) fail("preview expired or changed; display a fresh preview and confirm again");
+    if (standing) validateGrant(kept.body, rt.now());
+    saveState(path, { ...kept, pending: true });
+    const result = await postSigned(rt, {
+      action: standing ? "create_standing_bet" : "create_market",
+      market: standing ? kept.body.scope.marketId ?? "-" : "-",
+      path: `/api/bazaar/v1/${kind}`, body: kept.body,
+      ...(standing ? { intent: `standing bet: ${kept.summary}` } : {}),
+    });
+    if (standing && result.status >= 200 && result.status < 300) {
+      const grantId = result.json?.standingBet?.id;
+      if (typeof grantId !== "string" || !UUIDISH_RE.test(grantId)) fail("missing grant id; reconcile confirmation");
+      const grantPath = statePath(rt, "grant", [binding.wallet, grantId]);
+      await locked(grantPath, async () => {
+        if (readState(grantPath)) fail("grant id already exists; refusing to reset its budget");
+        saveState(grantPath, { binding, body: kept.body, createdAt: rt.now(), reservations: {}, revoked: false });
+      });
+    }
+    saveState(path, { ...kept, pending: true, result });
+    return result;
+  });
+}
+async function withGrant(rt, body, marketId, amount, fn) {
+  const binding = owner(rt);
+  const path = statePath(rt, "grant", [binding.wallet, body.standingBetId]);
+  return locked(path, async () => {
+    const kept = readState(path);
+    if (!kept || canonicalJson(kept.binding) !== canonicalJson(binding)) fail("unknown locally approved grant or owner mismatch");
+    const g = kept.body;
+    if (kept.revoked || !(Date.parse(g.expiresAt) > rt.now())) fail("standing grant revoked or expired");
+    if (body.outcomeKey !== g.outcomeKey || usdcMicros(amount) !== usdcMicros(g.amountPerBet)) fail("standing amount/outcome mismatch");
+    const period = g.cadence === "daily" ? `d:${new Date(rt.now()).toISOString().slice(0,10).replaceAll("-", "")}` : "m";
+    if (body.idempotencyKey !== `sb:${body.standingBetId}:${marketId}:${period}`) fail("standing idempotency key mismatch");
+    if (g.scope.marketId && g.scope.marketId !== marketId) fail("standing market out of scope");
+    const card = await bazaarHttp(rt, "GET", `/api/bazaar/v1/markets/${encodeURIComponent(marketId)}`);
+    const market = card.json?.market;
+    if (card.status !== 200 || market?.id !== marketId) fail("cannot verify standing market");
+    if (g.scope.creator && (card.json.creator?.wallet?.toLowerCase() !== g.scope.creator.toLowerCase() ||
+        !(Date.parse(market.createdAt) > kept.createdAt) || market.visibility !== "public")) fail("standing creator scope mismatch");
+    if (g.trigger) {
+      const odds = card.json.impliedOddsPct?.[g.outcomeKey];
+      if (typeof odds !== "number" || !Number.isFinite(odds) ||
+          (g.trigger.oddsBelowPct != null && !(odds < g.trigger.oddsBelowPct)) ||
+          (g.trigger.oddsAbovePct != null && !(odds > g.trigger.oddsAbovePct))) fail("standing trigger not met");
+    }
+    const key = body.idempotencyKey;
+    if (!kept.reservations[key]) {
+      const reservations = Object.values(kept.reservations);
+      const spent = reservations.reduce((sum, v) => sum + BigInt(v), 0n);
+      if (reservations.length >= g.maxBets || spent + BigInt(usdcMicros(amount)) > BigInt(usdcMicros(g.maxTotal))) fail("standing budget exhausted");
+      kept.reservations[key] = usdcMicros(amount);
+      saveState(path, kept); // Conservatively retained even on uncertain/failing payments.
+    }
+    return fn(() => {
+      if (!(Date.parse(g.expiresAt) > rt.now())) fail("standing grant expired before signing");
+    });
+  });
+}
+
 /** Invariant 4: one EIP-3009 authorization from pinned values, signed through Bankr. */
 export async function signStake(rt, wallet, amountAtomic) {
   const pinned = rt.registry.signingPolicy.pinned;
@@ -438,31 +574,46 @@ export async function signStake(rt, wallet, amountAtomic) {
 /**
  * A paid bet: send without payment, check the 402 (invariant 4), sign ONE
  * authorization and resend. The signed payment is kept (0600) under the bet's
- * idempotency key until a receipt arrives, so a rerun resends the SAME X-PAYMENT
+ * wallet/idempotency key permanently, so a rerun resends the SAME X-PAYMENT
  * instead of signing a second one.
  */
-export async function postPaid(rt, { path, body, marketId, amount }) {
+export async function postPaid(rt, request) {
+  const { body, marketId, amount, path } = request;
+  if (path !== `/api/bazaar/v1/markets/${marketId}/bets` || usdcMicros(body.amount) !== usdcMicros(amount)) fail("payment body/path mismatch");
+  const pay = () => postPaidLocked(rt, request);
+  return body.standingBetId ? withGrant(rt, body, marketId, amount, (guard) => postPaidLocked(rt, { ...request, guard })) : pay();
+}
+async function postPaidLocked(rt, { path, body, marketId, amount, guard = () => {} }) {
   const wallet = requireWalletEnv(rt);
   if (String(body.walletAddress ?? "").toLowerCase() !== wallet) fail("the body's walletAddress is not WALLET");
   const amountAtomic = usdcMicros(amount);
   const idem = String(body.idempotencyKey ?? "");
   if (!IDEMPOTENCY_RE.test(idem)) fail("the idempotency key must be 8-128 of A-Z a-z 0-9 _ : . -");
-  const saved = join(stateDir(rt), `x402-${idem.replace(/[:.]/g, "_")}.json`);
-  const betKey = `${wallet}|${marketId}|${body.outcomeKey}|${amountAtomic}`;
-
+  const saved = statePath(rt, "payment", [wallet, idem]);
+  const betKey = digest({ path, body, amountAtomic });
+  return locked(saved, async () => {
+  const legacy = join(stateDir(rt), `x402-${idem.replace(/[:.]/g, "_")}.json`);
+  if (existsSync(legacy)) fail("legacy payment state exists; reconcile its authorization before any upgraded retry");
   let header;
   if (existsSync(saved)) {
     const kept = JSON.parse(readFileSync(saved, "utf8"));
     if (kept.bet !== betKey) fail(`idempotency key ${idem} already paid for a different bet; use a new key for a new bet`);
+    if (kept.result) return kept.result;
+    if (!kept.header) fail("payment signing outcome uncertain; reconcile saved intent; never sign a new authorization");
     header = kept.header;
     rt.log(`resending the payment already signed for ${idem} (never a second signature)`);
   } else {
     const first = await bazaarHttp(rt, "POST", path, { body });
-    if (first.status !== 402) return first;
+    if (first.status !== 402) {
+      if (first.status >= 200 && first.status < 300) saveState(saved, { bet: betKey, result: first });
+      return first;
+    }
     const verdict = checkX402Challenge(first.json, { marketId, amountAtomic }, rt.registry);
     if (verdict !== "ok") fail(`not paying: ${verdict}`);
+    guard();
+    saveState(saved, { bet: betKey, pending: true });
     header = await signStake(rt, wallet, amountAtomic);
-    writeFileSync(saved, JSON.stringify({ bet: betKey, header }), { mode: 0o600 });
+    saveState(saved, { bet: betKey, header });
   }
 
   let paid = await bazaarHttp(rt, "POST", path, { body, headers: { "X-PAYMENT": header } });
@@ -472,8 +623,9 @@ export async function postPaid(rt, { path, body, marketId, amount }) {
     await rt.sleep(5_000);
     paid = await bazaarHttp(rt, "POST", path, { body, headers: { "X-PAYMENT": header } });
   }
-  if (paid.status === 200 || paid.status === 201) rmSync(saved, { force: true });
+  if (paid.status === 200 || paid.status === 201) saveState(saved, { bet: betKey, header, result: paid });
   return paid;
+  });
 }
 
 // ── Argument rules ───────────────────────────────────────────────────────────
@@ -594,33 +746,9 @@ export const COMMANDS = {
   subscriptions: (rt, f) => get(rt, `/api/bazaar/v1/subscriptions?wallet=${wallet(f)}`),
 
   // Previews: nothing is written, no proof.
-  draft: (rt, f) =>
-    bazaarHttp(rt, "POST", "/api/bazaar/v1/markets/draft", {
-      body: { ...jsonFlag(f), ...(rt.env.WALLET ? { walletAddress: requireWalletEnv(rt) } : {}) },
-    }),
-  "standing-bet-draft": (rt, f) =>
-    bazaarHttp(rt, "POST", "/api/bazaar/v1/standing-bets/draft", {
-      body: { ...jsonFlag(f), walletAddress: requireWalletEnv(rt) },
-    }),
-
-  // Writes with a wallet proof.
-  create: async (rt, f) => {
-    const walletAddress = requireWalletEnv(rt);
-    const preview = await bazaarHttp(rt, "POST", "/api/bazaar/v1/markets/draft", {
-      body: { ...jsonFlag(f), walletAddress },
-    });
-    if (preview.status !== 200 || f.confirm !== "true") return preview;
-    if (preview.json?.valid !== true) return { ...preview, refused: "the preview is not valid, so nothing was created" };
-    if (!(Date.parse(preview.json.confirm.confirmBy) > rt.now())) {
-      fail("the close is now too near for this preview; draft again with a later close");
-    }
-    return postSigned(rt, {
-      action: "create_market",
-      market: "-",
-      path: "/api/bazaar/v1/markets",
-      body: preview.json.confirm.body,
-    });
-  },
+  draft: (rt, f) => previewCreate(rt, { ...f, confirm: undefined }),
+  "standing-bet-draft": (rt, f) => previewCreate(rt, { ...f, confirm: undefined }, true),
+  create: (rt, f) => previewCreate(rt, f),
   resolve: (rt, f) => {
     const id = marketRef(f);
     const outcome = need(f, "outcome", OUTCOME_RE, "--outcome must be one of the market's outcome keys");
@@ -664,32 +792,21 @@ export const COMMANDS = {
     const body = { walletAddress: requireWalletEnv(rt), reason, ...(f.note ? { note: noteText(f, "note", 1, 1000) } : {}) };
     return postSigned(rt, { action: "report_market", market: id, path: `/api/bazaar/v1/markets/${id}/report`, body, intent: `report as "${intentValue(reason)}"` });
   },
-  "standing-bet-create": async (rt, f) => {
-    const walletAddress = requireWalletEnv(rt);
-    const preview = await bazaarHttp(rt, "POST", "/api/bazaar/v1/standing-bets/draft", {
-      body: { ...jsonFlag(f), walletAddress },
-    });
-    if (preview.status !== 200 || f.confirm !== "true") return preview;
-    if (preview.json?.valid !== true) return { ...preview, refused: "the preview is not valid, so no standing bet was set up" };
-    const body = preview.json.confirm.body;
-    const market = preview.json.confirm.proof.market;
-    return postSigned(rt, {
-      action: "create_standing_bet",
-      market,
-      path: "/api/bazaar/v1/standing-bets",
-      body,
-      intent: `standing bet: ${preview.json.summaryLine}`,
-    });
-  },
-  "standing-bet-revoke": (rt, f) => {
+  "standing-bet-create": (rt, f) => previewCreate(rt, f, true),
+  "standing-bet-revoke": async (rt, f) => {
     const id = need(f, "id", UUIDISH_RE, "--id must be a standing bet id");
-    return postSigned(rt, {
-      action: "revoke_standing_bet",
-      market: "-",
-      method: "DELETE",
-      path: `/api/bazaar/v1/standing-bets/${id}`,
-      body: { walletAddress: requireWalletEnv(rt), standingBetId: id },
-      intent: `revoke standing bet ${intentValue(id)}`,
+    const binding = owner(rt);
+    const path = statePath(rt, "grant", [binding.wallet, id]);
+    return locked(path, async () => {
+      const kept = readState(path);
+      if (kept && canonicalJson(kept.binding) !== canonicalJson(binding)) fail("grant owner mismatch");
+      saveState(path, { ...kept, binding, revoked: true }); // Stop locally even if DELETE fails.
+      return postSigned(rt, {
+        action: "revoke_standing_bet", market: "-", method: "DELETE",
+        path: `/api/bazaar/v1/standing-bets/${id}`,
+        body: { walletAddress: binding.wallet, standingBetId: id },
+        intent: `revoke standing bet ${intentValue(id)}`,
+      });
     });
   },
   subscribe: (rt, f) => {
@@ -787,10 +904,10 @@ reads:    fees | getting-started | skill-version | lookup --ref | market --id [-
           standing-bets --wallet | standing-bet --id | standing-bet-check --id
           subscriptions --wallet
 previews: draft --json | standing-bet-draft --json
-writes (WALLET, BANKR_API_KEY): create --json [--confirm] | resolve --id --outcome [--note --evidence]
+writes (WALLET, BANKR_API_KEY): create --json | create --preview-id --confirm | resolve --id --outcome [--note --evidence]
           void --id --note | register --label [--contact] | claim | share-link --id
           follow --creator | unfollow --creator | report --id --reason [--note]
-          standing-bet-create --json [--confirm] | standing-bet-revoke --id
+          standing-bet-create --json | create --preview-id --confirm | standing-bet-revoke --id
           subscribe --url --events | unsubscribe --id
 money:    bet --id --outcome --amount --idempotency-key [--ref-code --standing-bet]
           standing-bet-run --id`;

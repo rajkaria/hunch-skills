@@ -1,0 +1,11 @@
+{
+  "webhooks": {
+    "bazaar-events": {
+      "description": "Read-only Bazaar notifications with durable replay protection",
+      "readOnly": true,
+      "allowedRecipients": { "evm": [], "solana": [] },
+      "maxPayloadBytes": 10000,
+      "rateLimit": { "perMinute": 10, "perDay": 1000 }
+    }
+  }
+}

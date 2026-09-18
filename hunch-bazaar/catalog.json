@@ -15,7 +15,8 @@
     "Make a market: `@bankrbot market this: <question>`, then reply `confirm` to the preview; every write is signed with a free personal_sign wallet proof",
     "Only the creator can resolve or void; a market unresolved 48h past its deadline refunds every bettor",
     "Standing bets place bets inside limits the wallet signs once; event webhooks tell a wallet's own Bankr webhook when its markets close or its bets settle",
-    "Source: https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar"
+    "Source: https://github.com/rajkaria/hunch-skills/tree/main/hunch-bazaar",
+    "Payments go to a Hunch-controlled settlement account, not rule-enforcing market escrow. Bet recording, payouts and the promised 48-hour refunds depend on the operator; a payment receipt alone does not prove them."
   ],
   "install": {
     "type": "bankr",

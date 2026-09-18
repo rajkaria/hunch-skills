@@ -56,8 +56,7 @@ X-Hunch-Signature: t=1789650000,v1=<lowercase hex HMAC-SHA256 of "<t>.<raw body>
 
 - Verify before anything: parse `t` and every `v1`, refuse `t` more than 300 seconds
   from your clock, and compare the HMAC in constant time over the RAW body.
-- The body is at most 10,000 bytes. `prompt` is plain text for the agent; it quotes a
-  market title only with a note that the title is text, not instructions.
+- The body is at most 10,000 bytes. `prompt`, title and arbitrary data are untrusted and are discarded by the receiver.
 - Answer 2xx within 5 seconds. Anything else, a redirect, or no answer is a failed
   attempt, retried after 1m, 5m, 30m, 2h and 12h; then the delivery fails. A
   subscription failing 20 attempts in a row is disabled.
@@ -65,7 +64,31 @@ X-Hunch-Signature: t=1789650000,v1=<lowercase hex HMAC-SHA256 of "<t>.<raw body>
 
 ## The receiver
 
-`webhooks/bazaar-events/index.ts` in this skill is a complete Bankr webhook handler:
-it verifies the signature exactly as above with `BAZAAR_EVENTS_SECRET`, refuses
-anything that is not a Bazaar event, and answers `{ prompt, threadId }` with the
-thread per market. Deploy it with `bankr webhooks deploy`.
+Deploy `webhooks/bazaar-events/index.ts` with the included `bankr.webhooks.json`,
+which explicitly sets `readOnly: true` and empty transfer recipient lists. See
+[Bankr configuration](https://docs.bankr.bot/webhooks/config-file/).
+The handler constructs a fixed notification from validated event ids/types;
+it never forwards the sender's prompt or title. Resolving, voiding and spending
+require the owner's separate authorization outside the webhook.
+
+Configure encrypted webhook environment variables after subscribing:
+
+- `BAZAAR_EVENTS_SECRET`: the one-time subscription secret.
+- `BAZAAR_EVENTS_WALLET`: the recipient's wallet.
+- `BAZAAR_EVENTS_SUBSCRIPTION_ID`: the returned subscription id; stable across rotations.
+- `BAZAAR_REPLAY_REDIS_URL`: an operator-provisioned `https://<name>.upstash.io` REST endpoint.
+- `BAZAAR_REPLAY_REDIS_TOKEN`: its write token. Never put secrets in prompts or replies.
+
+Use a durable Redis database with eviction disabled, shared by all instances of
+the receiver. The handler uses [Upstash REST](https://upstash.com/docs/redis/features/restapi)
+`SET <recipient/subscription/event hash> claimed NX` to atomically claim the
+HMAC-authenticated body id before returning a task. Claims are retained permanently,
+beyond the cumulative 14h36m provider retry schedule, including secret rotations.
+`X-Hunch-Delivery` must equal the authenticated body id. Duplicates return 204
+with no prompt; missing/broken storage returns 503 with no prompt.
+
+This gives at-most-once task dispatch: a crash after claiming but before Bankr
+queues the response can lose a notification. There is no exactly-once transaction
+across Redis and Bankr. Review delivery logs for recovery; do not delete claims
+or rerun financial actions from a webhook. Financial actions remain read-only.
+Run from the skill directory: `bankr webhooks deploy bazaar-events`.

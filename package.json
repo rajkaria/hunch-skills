@@ -1,0 +1,7 @@
+{
+  "name": "hunch-skills-security-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test hunch-bazaar/test/*.test.mjs" },
+  "engines": { "node": ">=22.18" }
+}
