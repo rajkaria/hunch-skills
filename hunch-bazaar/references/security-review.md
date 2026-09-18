@@ -1,4 +1,4 @@
-# Bazaar skill 3.0.2 security regression coverage
+# Bazaar skill 3.1.0 security regression coverage
 
 Run from the public skills repository with Node 22.18+:
 
@@ -35,3 +35,26 @@ spend funds. See events.md for provisioning and recovery requirements.
 Market metadata and pool facts still depend on Hunch. Payments go to the pinned
 Hunch settlement account, not a market escrow enforcing payouts/refunds. These
 client tests are not a backend settlement audit or proof of payout solvency.
+
+## Native Bankr X creation (3.1.0)
+
+The hosted creation bridge uses the runtime native `sign_data` personal-sign
+tool, verified by read-only tool discovery in Bankr Terminal. It does not use
+API credentials, guessed requesting-user IDs, or sandbox-local persistence.
+Preview records are saved using Bankr wallet-scoped `write_file`/`read_file`;
+the SHA-256 commitment in the original bot preview reply binds the exact body,
+identity and expiry. Confirmation must come from the same authenticated user.
+The file itself is untrusted, and changing it cannot preserve its commitment.
+
+The bridge validates Bazaar's entire challenge before handing it to the native
+signer, and again before submission. The server verifies the signature and
+nonce. Source-post uniqueness and creator ownership support response-loss
+reconciliation. The script never signs or transfers funds itself.
+
+`test/native.test.mjs` covers empty-env fresh runtimes, independent wallets,
+identity and content substitution, expiry, malicious challenges, dropped
+responses, source ownership, fixed fees, and shell-safe base64url transport.
+Node and Bun pass all 46 script tests. The production draft and unsigned
+create challenge were checked without publishing a market. A confirmed
+end-to-end X publication remains the release acceptance check; no claim of
+verified public market creation is made by these tests.

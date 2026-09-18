@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 export const ORIGIN = "https://bazaar.playhunch.xyz";
 export const BANKR_API = "https://api.bankr.bot";
 export const SKILL_NAME = "hunch-bazaar";
-export const SKILL_VERSION = "3.0.2";
+export const SKILL_VERSION = "3.1.0";
 
 const PROOF_DOMAIN_LINE = "bazaar.playhunch.xyz asks you to sign a Bazaar action.";
 const PROOF_FOOTER_LINE =
