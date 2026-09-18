@@ -14,7 +14,7 @@
 //   1. One origin. Every Bazaar request goes to https://bazaar.playhunch.xyz over
 //      https, to a path under /api/bazaar/, with no redirect followed. Nothing in
 //      the environment or a response can change it.
-//   2. Signing stays inside Bankr. BANKR_API_KEY goes to
+//   2. Signing stays inside Bankr. HUNCH_BANKR_API_KEY goes to
 //      https://api.bankr.bot/wallet/sign and nowhere else, and a signature is used
 //      only when Bankr reports it came from WALLET.
 //   3. A wallet-proof message is signed only after checkProofChallenge accepts it:
@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 export const ORIGIN = "https://bazaar.playhunch.xyz";
 export const BANKR_API = "https://api.bankr.bot";
 export const SKILL_NAME = "hunch-bazaar";
-export const SKILL_VERSION = "3.0.1";
+export const SKILL_VERSION = "3.0.2";
 
 const PROOF_DOMAIN_LINE = "bazaar.playhunch.xyz asks you to sign a Bazaar action.";
 const PROOF_FOOTER_LINE =
@@ -244,7 +244,7 @@ export function checkX402Challenge(response, request, registry = loadRegistry())
 
 /**
  * Everything the commands touch outside this file, injectable for tests:
- * `fetch`, the environment (WALLET, BANKR_API_KEY, BAZAAR_STATE_DIR), the clock
+ * `fetch`, the environment (HUNCH_BANKR_API_KEY, BAZAAR_STATE_DIR), the clock
  * and where progress goes.
  */
 export function createRuntime(options = {}) {
@@ -254,7 +254,7 @@ export function createRuntime(options = {}) {
   const log = options.log ?? ((line) => process.stderr.write(`${line}\n`));
   const registry = options.registry ?? loadRegistry();
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  return { env, fetch: fetchImpl, now, log, registry, sleep };
+  return { env, fetch: fetchImpl, now, log, registry, sleep, identity: options.identity ?? null };
 }
 
 /** Invariant 1: one origin, one path prefix, https only, no redirect followed. */
@@ -294,16 +294,48 @@ export async function bazaarHttp(rt, method, path, { body, headers = {} } = {}) 
   return { status: response.status, json, text };
 }
 
+function bankrKey(rt) {
+  const key = rt.env.HUNCH_BANKR_API_KEY ?? rt.env.BANKR_API_KEY;
+  if (!key) fail("HUNCH_BANKR_API_KEY is not set; add a Wallet API write key in Bankr Terminal Settings > Env Vars");
+  return key;
+}
+
+/** Bind every write to the wallet authenticated by the Bankr API key. */
+export async function authenticateBankrWallet(rt) {
+  const key = bankrKey(rt);
+  let response;
+  try {
+    response = await rt.fetch(`${BANKR_API}/wallet/me`, {
+      method: "GET",
+      headers: { "X-API-Key": key },
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    fail(`could not verify the Bankr wallet: ${error?.message ?? error}`);
+  }
+  if (response.status !== 200) fail(`Bankr /wallet/me answered ${response.status}; check HUNCH_BANKR_API_KEY Wallet API access`);
+  let json;
+  try { json = await response.json(); } catch { fail("Bankr /wallet/me did not return JSON"); }
+  const wallets = [...new Set((Array.isArray(json?.wallets) ? json.wallets : [])
+    .filter((item) => item?.chain === "evm" && WALLET_RE.test(item.address))
+    .map((item) => item.address.toLowerCase()))];
+  if (wallets.length !== 1) fail("Bankr /wallet/me must return exactly one EVM wallet");
+  const wallet = wallets[0];
+  if (rt.env.WALLET && String(rt.env.WALLET).toLowerCase() !== wallet) fail("wallet mismatch: WALLET is not the Bankr API-key wallet");
+  rt.identity = { wallet, user: `bankr:${wallet}` };
+  return rt.identity;
+}
+
 function requireWalletEnv(rt) {
-  const wallet = String(rt.env.WALLET ?? "");
+  const wallet = String(rt.identity?.wallet ?? rt.env.WALLET ?? "");
   if (!WALLET_RE.test(wallet)) fail("WALLET must be the requesting user's own Bankr wallet (0x + 40 hex)");
   return wallet.toLowerCase();
 }
 
 /** Invariant 2: sign through the Bankr Wallet API, as WALLET and nobody else. */
 export async function bankrSign(rt, request, wallet) {
-  const key = rt.env.BANKR_API_KEY;
-  if (!key) fail("BANKR_API_KEY is not set; signing needs a Bankr API key with Wallet API write access");
+  const key = bankrKey(rt);
   let response;
   try {
     response = await rt.fetch(`${BANKR_API}/wallet/sign`, {
@@ -408,7 +440,7 @@ async function locked(path, fn) {
   try { return await fn(); } finally { rmSync(lock, { recursive: true }); }
 }
 function owner(rt) {
-  const user = rt.env.BAZAAR_REQUESTING_USER;
+  const user = rt.identity?.user ?? rt.env.BAZAAR_REQUESTING_USER;
   if (typeof user !== "string" || !/^[A-Za-z0-9_:@.-]{1,160}$/.test(user))
     fail("BAZAAR_REQUESTING_USER must be the authenticated requesting user's stable id");
   return { wallet: requireWalletEnv(rt), user };
@@ -894,6 +926,12 @@ async function followWrite(rt, f, action, method) {
   });
 }
 
+const AUTH_COMMANDS = new Set([
+  "draft", "standing-bet-draft", "create", "resolve", "void", "register",
+  "claim", "share-link", "follow", "unfollow", "report", "standing-bet-create",
+  "standing-bet-revoke", "subscribe", "unsubscribe", "bet", "standing-bet-run",
+]);
+
 export const USAGE = `usage: node scripts/bazaar.mjs <command> [--flag value ...]
 reads:    fees | getting-started | skill-version | lookup --ref | market --id [--wallet]
           by-tweet --id | by-post --platform --id | quote --id --outcome --amount
@@ -904,7 +942,7 @@ reads:    fees | getting-started | skill-version | lookup --ref | market --id [-
           standing-bets --wallet | standing-bet --id | standing-bet-check --id
           subscriptions --wallet
 previews: draft --json | standing-bet-draft --json
-writes (WALLET, BANKR_API_KEY): create --json | create --preview-id --confirm | resolve --id --outcome [--note --evidence]
+writes (HUNCH_BANKR_API_KEY): create --json | create --preview-id --confirm | resolve --id --outcome [--note --evidence]
           void --id --note | register --label [--contact] | claim | share-link --id
           follow --creator | unfollow --creator | report --id --reason [--note]
           standing-bet-create --json | create --preview-id --confirm | standing-bet-revoke --id
@@ -924,6 +962,7 @@ export async function run(argv, options = {}) {
       rt.log(USAGE);
       return 1;
     }
+    if (AUTH_COMMANDS.has(parsed.command)) await authenticateBankrWallet(rt);
     const result = await command(rt, parsed.flags);
     out(result.json !== null ? JSON.stringify(result.json, null, 2) : result.text);
     if (result.refused) {

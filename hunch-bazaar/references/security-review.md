@@ -1,4 +1,4 @@
-# Bazaar skill 3.0.1 security regression coverage
+# Bazaar skill 3.0.2 security regression coverage
 
 Run from the public skills repository with Node 22.18+:
 

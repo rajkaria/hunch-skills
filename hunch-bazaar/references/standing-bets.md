@@ -113,4 +113,5 @@ local grant stopped before calling the server, even if that request fails.
 Creator membership/creation time and odds are checked against the market card;
 those facts still depend on the Hunch operator. All wallet runners must share
 one durable state directory on one host. Do not delete records or locks to retry.
-Use the same trusted `BAZAAR_REQUESTING_USER` for approval and scheduled runs.
+Use the same authenticated Bankr wallet for approval and scheduled runs. The
+script derives the owner from `/wallet/me` using `HUNCH_BANKR_API_KEY`.
